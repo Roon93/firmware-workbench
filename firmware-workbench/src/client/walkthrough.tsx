@@ -285,8 +285,34 @@ function ClarifyStep(props: { shared: StepProps }): React.JSX.Element {
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [newQuestion, setNewQuestion] = useState('')
 
+  const [aiRunning, setAiRunning] = useState(false)
+  const aiDraft = async (): Promise<void> => {
+    setAiRunning(true)
+    shared.addLog('info', 'AI 正在分析需求并起草澄清问题(约 30-90 秒)…')
+    try {
+      const result = await fetchJson<{ ok: boolean; added?: number; error?: string }>('/ai/clarify', {
+        method: 'POST',
+        body: JSON.stringify({ requirementId: shared.reqId }),
+      })
+      shared.addLog('info', `✓ AI 起草了 ${result.added ?? 0} 个澄清问题(已进入清单,待你回答)`)
+      await shared.data.refresh()
+    } catch (error) {
+      shared.addLog('error', `✗ AI 起草失败:${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setAiRunning(false)
+    }
+  }
+
   if (questions.length === 0) {
-    return <div className="wb-faint" style={{ fontSize: 12 }}>该需求还没有澄清问题。{(shared.data.snapshot?.requirements?.length ?? 0) === 0 ? '先导入需求。' : '（模板问题随导入自动生成。）'}</div>
+    return (
+      <>
+        <div className="wb-faint" style={{ fontSize: 12 }}>该需求还没有澄清问题。让 AI 分析需求起草问题,或手动补充。</div>
+        <button className="wb-btn wb-btn--primary" disabled={shared.busy || aiRunning} onClick={() => void aiDraft()}>
+          <Icon name="zap" size={12} /> {aiRunning ? 'AI 分析中…(30-90 秒)' : 'AI 起草澄清问题'}
+        </button>
+        <div className="wb-faint" style={{ fontSize: 11 }}>需要 DSH 已配置模型(设置 → 模型);未配置时会给出明确提示,仍可手动加问题。</div>
+      </>
+    )
   }
 
   return (
@@ -346,6 +372,9 @@ function ClarifyStep(props: { shared: StepProps }): React.JSX.Element {
         </div>
       ))}
       <div style={{ display: 'flex', gap: 8 }}>
+        <button className="wb-btn" disabled={shared.busy || aiRunning} onClick={() => void aiDraft()}>
+          <Icon name="zap" size={12} /> {aiRunning ? 'AI 分析中…' : 'AI 追加盲点问题'}
+        </button>
         <input
           className="wb-input"
           placeholder="补充问题(可选)…"
@@ -375,6 +404,7 @@ function DefineStep(props: { shared: StepProps }): React.JSX.Element {
   const defines = requirement?.defines ?? []
   const current = defines.at(-1)
   const [reviewComment, setReviewComment] = useState('')
+  const [aiRunning, setAiRunning] = useState(false)
   const approved = defines.some(define => define.status === 'approved')
 
   const draft = async (): Promise<void> => {
@@ -430,11 +460,37 @@ function DefineStep(props: { shared: StepProps }): React.JSX.Element {
       )}
 
       {!approved && current?.status !== 'in-review' && (
-        <div>
-          <button className="wb-btn wb-btn--primary" disabled={shared.busy} onClick={() => void draft()}>
-            <Icon name="file-text" size={12} /> {items.length === 0 ? '生成条目并起草 Define v1' : `起草 Define v${defines.length + 1} 并提交评审`}
-          </button>
-          {items.length === 0 && <span className="wb-faint" style={{ fontSize: 11, marginLeft: 8 }}>将从澄清答案生成条目(模板映射)</span>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              className="wb-btn wb-btn--primary"
+              disabled={shared.busy || aiRunning}
+              onClick={() => {
+                setAiRunning(true)
+                shared.addLog('info', 'AI 正在基于澄清答案起草条目与 Define(约 30-90 秒)…')
+                fetchJson<{ ok: boolean; defineId?: string; items?: number; error?: string }>('/ai/define', {
+                  method: 'POST',
+                  body: JSON.stringify({ requirementId: shared.reqId }),
+                })
+                  .then(async result => {
+                    shared.addLog('info', `✓ AI 起草 ${result.items ?? 0} 条条目并提交 Define ${result.defineId ?? ''}(in-review,待你评审)`)
+                    await shared.data.refresh()
+                  })
+                  .catch(error => {
+                    shared.addLog('error', `✗ AI 起草失败:${error instanceof Error ? error.message : String(error)}`)
+                  })
+                  .finally(() => setAiRunning(false))
+              }}
+            >
+              <Icon name="zap" size={12} /> {aiRunning ? 'AI 分析中…(30-90 秒)' : 'AI 起草条目与 Define(提交评审)'}
+            </button>
+            <button className="wb-btn" disabled={shared.busy || aiRunning} onClick={() => void draft()}>
+              <Icon name="file-text" size={12} /> 手动起草(模板)
+            </button>
+          </div>
+          <div className="wb-faint" style={{ fontSize: 11 }}>
+            AI 将基于原始需求与你的澄清答案起草;产出进入 in-review 待评审态——你仍是签署方。需要 DSH 已配置模型。
+          </div>
         </div>
       )}
 

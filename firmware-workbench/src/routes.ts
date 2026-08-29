@@ -8,6 +8,7 @@ import { evaluateRequirement, generateAcceptanceBundle } from './core/acceptance
 import { listTestCases, getTestCase, recordTestRun } from './core/testing.js'
 import { demoDirector, type DemoStateView } from './core/demo-player.js'
 import { changeItem } from './core/align.js'
+import { aiClarifyQuestions, aiDraftDefine } from './core/ai-orchestrator.js'
 import {
   listRequirements,
   listQuestions,
@@ -65,6 +66,8 @@ export const ROUTES = {
   items: `${ROUTE_PREFIX}/items`,
   itemPropose: `${ROUTE_PREFIX}/items/propose`,
   itemChange: `${ROUTE_PREFIX}/items/change`,
+  aiClarify: `${ROUTE_PREFIX}/ai/clarify`,
+  aiDefine: `${ROUTE_PREFIX}/ai/define`,
   defineDraft: `${ROUTE_PREFIX}/define/draft`,
   defineSubmit: `${ROUTE_PREFIX}/define/submit`,
   defineReview: `${ROUTE_PREFIX}/define/review`,
@@ -459,6 +462,22 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           }, 'web')
           service.workbench.refreshStates('web')
           sendJson(res, 200, { ok: true, ...outcome })
+          return
+        }
+        case ROUTES.aiClarify: {
+          const requirementId = String(body.requirementId ?? '')
+          if (!requirementId) throw new Error('需要 requirementId')
+          service.store.appendEvent('web', 'ai.clarify_start', { requirementId })
+          const result = await aiClarifyQuestions(service.store, requirementId, 'web')
+          sendJson(res, result.ok ? 200 : 502, result)
+          return
+        }
+        case ROUTES.aiDefine: {
+          const requirementId = String(body.requirementId ?? '')
+          if (!requirementId) throw new Error('需要 requirementId')
+          service.store.appendEvent('web', 'ai.define_start', { requirementId })
+          const result = await aiDraftDefine(service.store, requirementId, 'web')
+          sendJson(res, result.ok ? 200 : 502, result)
           return
         }
         case ROUTES.defineDraft: {
