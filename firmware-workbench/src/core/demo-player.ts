@@ -1,6 +1,6 @@
 import type { Workbench } from './workbench.js'
 import type { EvidenceStore } from './evidence/store.js'
-import { seedDemo, resetDemoState, approveDefineGate, freezeContractGate, DEMO_REQUIREMENT_ID } from '../demo.js'
+import { seedDemo, resetDemoState, autoAlignRequirement, freezeContractGate, DEMO_REQUIREMENT_ID } from '../demo.js'
 import { runTaskLocally, runSimTask } from './runner/local.js'
 import { generateAcceptanceBundle } from './acceptance.js'
 
@@ -308,8 +308,9 @@ class DemoDirector {
         return
       }
       case 1: {
-        approveDefineGate(workbench.store, 'demo')
-        this.log('info', 'G1 定义完成门禁:需求 Define 已批准')
+        const aligned = autoAlignRequirement(workbench.store, DEMO_REQUIREMENT_ID, 'demo')
+        this.log('info', `澄清 ${aligned.questionsAnswered} 题 · 条目 ${aligned.items.length} 条 · Define ${aligned.defineId} ${aligned.decision}`)
+        this.log('info', 'G1 定义完成门禁:需求评审批准')
         return run('TASK-COPY-0001')
       }
       case 2: {

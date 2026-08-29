@@ -3,8 +3,10 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /**
- * SQLite 存储:实体表 + 审计事件(方案 13.2/15.4)。
+ * SQLite 存储:实体表 + 审计事件(方案 13.2/15.4;v2 工作流提案 §3.1/§8)。
  * 数据库保存索引、状态和关系;大文件由证据模块放入内容寻址目录。
+ * v2 新增:澄清问题、原子需求条目、Define 版本链、三态评审、决策记录、变更记录
+ * —— 全部带 source_refs(知识溯源埋点,提案 §7.4 硬约束)。
  */
 
 export interface AuditEvent {
@@ -21,16 +23,97 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
+-- 需求(多需求集合,提案 G2;status: clarifying→defining→in-review→approved→changed)
 CREATE TABLE IF NOT EXISTS requirements (
   id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'feature',
   title TEXT NOT NULL,
   original_text TEXT,
-  definition TEXT,
-  status TEXT NOT NULL,
-  priority TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'clarifying',
+  priority TEXT NOT NULL DEFAULT 'medium',
+  depends_on TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+-- 澄清问题(提案 §3.1 Clarify;status: open|answered|skipped)
+CREATE TABLE IF NOT EXISTS clarify_questions (
+  id TEXT PRIMARY KEY,
+  requirement_id TEXT NOT NULL REFERENCES requirements(id),
+  question TEXT NOT NULL,
+  why TEXT,
+  options TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  answer TEXT,
+  answered_by TEXT,
+  answered_at TEXT,
+  origin TEXT NOT NULL DEFAULT 'manual',
+  source_refs TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+
+-- 原子需求条目(提案 §3.1;status: proposed|in-review|approved|changed)
+CREATE TABLE IF NOT EXISTS requirement_items (
+  id TEXT PRIMARY KEY,
+  requirement_id TEXT NOT NULL REFERENCES requirements(id),
+  seq INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  acceptance TEXT NOT NULL DEFAULT '[]',
+  priority TEXT NOT NULL DEFAULT 'medium',
+  status TEXT NOT NULL DEFAULT 'proposed',
+  origin TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Define 版本链(提案 §3.1;status: draft|in-review|approved|rejected|superseded)
+CREATE TABLE IF NOT EXISTS define_versions (
+  id TEXT PRIMARY KEY,
+  requirement_id TEXT NOT NULL REFERENCES requirements(id),
+  version INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  item_snapshot TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'draft',
+  submitted_at TEXT,
+  decided_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(requirement_id, version)
+);
+
+-- 三态评审(approve|request-changes|comment;意见挂条目,提案 §3.1)
+CREATE TABLE IF NOT EXISTS reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_id TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  reviewer TEXT NOT NULL,
+  comments TEXT NOT NULL DEFAULT '[]',
+  decided_at TEXT NOT NULL
+);
+
+-- 决策记录(ADR + 修正,提案 G10)
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'adr',
+  summary TEXT NOT NULL,
+  rationale TEXT,
+  refs TEXT NOT NULL DEFAULT '[]',
+  actor TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- 变更记录(G5 来源分类:customer|implementation-finding|test-finding;含 stale 传导结果)
+CREATE TABLE IF NOT EXISTS change_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  requirement_id TEXT NOT NULL,
+  item_id TEXT,
+  source TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  detail TEXT,
+  stale_tasks TEXT NOT NULL DEFAULT '[]',
+  stale_cases TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS acceptance_criteria (
@@ -82,6 +165,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   note TEXT,
   status TEXT NOT NULL,
   blocked_reason TEXT,
+  stale_reason TEXT,
   created_at TEXT NOT NULL,
   started_at TEXT,
   finished_at TEXT,
@@ -177,11 +261,10 @@ CREATE TABLE IF NOT EXISTS events (
 
 export class WorkbenchStore {
   readonly db: DatabaseSync
-  readonly path: string
+  readonly path: string = ''
 
   constructor(dbPath: string) {
     mkdirSync(dirname(dbPath), { recursive: true })
-    this.path = dbPath
     this.db = new DatabaseSync(dbPath)
     this.db.exec('PRAGMA journal_mode = WAL;')
     this.db.exec('PRAGMA foreign_keys = ON;')

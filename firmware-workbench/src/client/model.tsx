@@ -22,6 +22,7 @@ export interface TaskView {
   title: string
   status: string
   blockedReason?: string
+  staleReason?: string
   requirementRefs: string[]
   acceptanceRefs: string[]
   dependencies: Array<{ kind: string; ref: string }>
@@ -38,11 +39,67 @@ export interface TaskView {
   attempts: number
 }
 
+export interface RequirementView {
+  id: string
+  kind: string
+  title: string
+  originalText?: string
+  status: string
+  priority: string
+  dependsOn?: string
+  openQuestions?: number
+  itemCount?: number
+  questions?: ClarifyQuestionView[]
+  items?: ItemView[]
+  defines?: DefineVersionView[]
+}
+
+export interface ClarifyQuestionView {
+  id: string
+  requirementId: string
+  question: string
+  why?: string
+  options: string[]
+  status: 'open' | 'answered' | 'skipped'
+  answer?: string
+  origin: string
+  createdAt: string
+}
+
+export interface ItemView {
+  id: string
+  requirementId: string
+  seq: number
+  content: string
+  acceptance: Array<{ title: string; method: string; threshold?: string; maxLevel: string }>
+  status: string
+  origin?: string
+  version: number
+}
+
+export interface DefineVersionView {
+  id: string
+  requirementId: string
+  version: number
+  body: Record<string, unknown>
+  status: 'draft' | 'in-review' | 'approved' | 'rejected' | 'superseded'
+  submittedAt?: string
+  decidedAt?: string
+}
+
+export interface LaneSummary {
+  openQuestions: Array<{ id: string; requirementId: string; question: string }>
+  definesInReview: Array<{ id: string; requirementId: string; version: number }>
+  changedRequirements: Array<{ id: string; title: string }>
+  staleTasks: Array<{ id: string; title: string; staleReason?: string }>
+}
+
 export interface Snapshot {
   now: string
-  requirement?: { id: string; title: string; originalText?: string; status: string } | null
+  requirements?: RequirementView[]
   acceptance?: { acceptanceId: string; decision: string; decidedAt: string } | null
   gates?: Array<{ id: string; decision: string }>
+  lane?: LaneSummary
   tasks: { total: number; byStatus: Record<string, number>; blocked: Array<{ id: string; status: string; reason: string }> }
   ready: Array<{ id: string; title: string; score: number; onCriticalPath: boolean }>
   criticalPath: { ids: string[]; totalMinutes: number }

@@ -64,6 +64,7 @@ function rowToTask(row: Record<string, unknown>): Task {
     note: (row.note as string) ?? undefined,
     status: row.status as TaskStatus,
     blockedReason: (row.blocked_reason as string) ?? undefined,
+    staleReason: (row.stale_reason as string) ?? undefined,
     createdAt: row.created_at as string,
     startedAt: (row.started_at as string) ?? undefined,
     finishedAt: (row.finished_at as string) ?? undefined,

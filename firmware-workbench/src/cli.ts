@@ -5,9 +5,10 @@ import { join, resolve } from 'node:path'
 import { WorkbenchStore } from './core/store.js'
 import { Workbench } from './core/workbench.js'
 import { seedResources, listResources, listLeases, releaseTaskLeases, quarantineResource, completeMaintenance } from './core/resources.js'
-import { importRequirement } from './core/requirement.js'
+import { importRawRequirement } from './core/align.js'
 import { createContract, freezeContract } from './core/contract.js'
 import { validateDag } from './core/dag.js'
+import { listQuestions } from './core/align.js'
 import { EvidenceStore } from './core/evidence/store.js'
 import { evaluateRequirement, generateAcceptanceBundle } from './core/acceptance.js'
 import { getTestCase, recordTestRun, buildJunitXml, listTestCases, type TestCaseRow } from './core/testing.js'
@@ -129,8 +130,9 @@ function cmdRequirementImport(ctx: CliContext, args: { title?: string; text?: st
   const title = args.title
   const text = args.text
   if (!title || !text) fail('requirement import 需要 --title 与 --text')
-  const requirement = importRequirement(ctx.store, { title, originalText: text, actor: 'fwctl' })
-  printJson({ ok: true, id: requirement.id, status: requirement.status })
+  const requirement = importRawRequirement(ctx.store, { title, text }, 'fwctl')
+  const questions = listQuestions(ctx.store, requirement.id).length
+  printJson({ ok: true, id: requirement.id, status: requirement.status, questions })
 }
 
 function cmdContractFreeze(ctx: CliContext, args: { name?: string; version?: string }): void {

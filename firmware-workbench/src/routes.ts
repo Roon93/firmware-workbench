@@ -1,12 +1,26 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { service } from './service.js'
-import { seedDemo, importUserRequirement, approveDefineGate, freezeContractGate } from './demo.js'
+import { seedDemo, importUserRequirement, autoAlignRequirement, freezeContractGate } from './demo.js'
 import { runTaskLocally } from './core/runner/local.js'
 import { releaseTaskLeases, quarantineResource, completeMaintenance, listLeases } from './core/resources.js'
 import { evaluateRequirement, generateAcceptanceBundle } from './core/acceptance.js'
 import { listTestCases, getTestCase, recordTestRun } from './core/testing.js'
 import { demoDirector, type DemoStateView } from './core/demo-player.js'
+import { changeItem } from './core/align.js'
+import {
+  listRequirements,
+  listQuestions,
+  addQuestion,
+  answerQuestion,
+  listItems,
+  proposeItem,
+  draftDefine,
+  listDefineVersions,
+  submitDefine,
+  reviewDefine,
+  laneSummary,
+} from './core/align.js'
 import { simService } from './sim/sim-service.js'
 import { SCENARIO_EXPECTATIONS, type SimScenario } from './sim/virtual-device.js'
 import { readFileSync } from 'node:fs'
@@ -44,6 +58,17 @@ export const ROUTES = {
   simRun: `${ROUTE_PREFIX}/sim/run`,
   simAction: `${ROUTE_PREFIX}/sim/action`,
   caseRun: `${ROUTE_PREFIX}/case-run`,
+  requirements: `${ROUTE_PREFIX}/requirements`,
+  clarify: `${ROUTE_PREFIX}/clarify`,
+  clarifyAnswer: `${ROUTE_PREFIX}/clarify/answer`,
+  clarifyAdd: `${ROUTE_PREFIX}/clarify/add`,
+  items: `${ROUTE_PREFIX}/items`,
+  itemPropose: `${ROUTE_PREFIX}/items/propose`,
+  itemChange: `${ROUTE_PREFIX}/items/change`,
+  defineDraft: `${ROUTE_PREFIX}/define/draft`,
+  defineSubmit: `${ROUTE_PREFIX}/define/submit`,
+  defineReview: `${ROUTE_PREFIX}/define/review`,
+  lane: `${ROUTE_PREFIX}/lane`,
   requirementImport: `${ROUTE_PREFIX}/requirement/import`,
   defineApprove: `${ROUTE_PREFIX}/define/approve`,
   contractsFreeze: `${ROUTE_PREFIX}/contracts/freeze`,
@@ -118,16 +143,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         // 座舱轮询入口:顺带做状态刷新(幂等),保证阻塞原因与 Ready 队列最新
         workbench.sweep('web')
         const snapshot = workbench.statusSnapshot() as Record<string, unknown>
-        const requirement = service.store.db
-          .prepare('SELECT id, title, original_text, status FROM requirements ORDER BY created_at DESC LIMIT 1')
-          .get() as { id: string; title: string; original_text?: string; status: string } | undefined
         const gates = service.store.db
           .prepare('SELECT id, decision FROM gates ORDER BY id')
           .all() as Array<{ id: string; decision: string }>
         const reportMeta = readLatestReportMeta(service.store)
-        snapshot.requirement = requirement
-          ? { id: requirement.id, title: requirement.title, originalText: requirement.original_text ?? '', status: requirement.status }
-          : null
+        snapshot.requirements = listRequirements(service.store).map(req => ({
+          ...req,
+          questions: listQuestions(service.store, req.id),
+          items: listItems(service.store, req.id),
+          defines: listDefineVersions(service.store, req.id),
+          openQuestions: listQuestions(service.store, req.id).filter(q => q.status === 'open').length,
+          itemCount: listItems(service.store, req.id).length,
+        }))
+        snapshot.lane = laneSummary(service.store)
         snapshot.gates = gates
         snapshot.acceptance = reportMeta
           ? { acceptanceId: reportMeta.acceptanceId, decision: reportMeta.decision, decidedAt: reportMeta.decidedAt }
@@ -151,6 +179,38 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
       case ROUTES.cases:
         sendJson(res, 200, listTestCases(service.store))
+        return
+      case ROUTES.requirements: {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const reqId = url.searchParams.get('id')
+        const all = listRequirements(service.store)
+        const result = reqId
+          ? all.filter(req => req.id === reqId).map(req => ({
+              ...req,
+              questions: listQuestions(service.store, req.id),
+              items: listItems(service.store, req.id),
+              defines: listDefineVersions(service.store, req.id),
+            }))
+          : all.map(req => ({
+              ...req,
+              openQuestions: listQuestions(service.store, req.id).filter(q => q.status === 'open').length,
+              itemCount: listItems(service.store, req.id).length,
+            }))
+        sendJson(res, 200, result)
+        return
+      }
+      case ROUTES.clarify: {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        sendJson(res, 200, listQuestions(service.store, url.searchParams.get('req') ?? undefined))
+        return
+      }
+      case ROUTES.items: {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        sendJson(res, 200, listItems(service.store, url.searchParams.get('req') ?? undefined))
+        return
+      }
+      case ROUTES.lane:
+        sendJson(res, 200, laneSummary(service.store))
         return
       case ROUTES.demoState: {
         const url = new URL(req.url ?? '/', 'http://localhost')
@@ -294,7 +354,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           return
         }
         case ROUTES.defineApprove: {
-          const result = approveDefineGate(service.store, 'web')
+          // 兼容路由:答问题+条目+Define 起草+批准一步完成(引导 UI v2 已拆分为逐步接口)
+          const requirementId = String(body.requirementId ?? 'REQ-COPY-0001')
+          const result = autoAlignRequirement(service.store, requirementId, 'web')
           service.workbench.refreshStates('web')
           sendJson(res, 200, { ok: true, ...result })
           return
@@ -345,6 +407,80 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           const action = String(body.action ?? '') as 'load-paper' | 'give-up' | 'cancel'
           if (!['load-paper', 'give-up', 'cancel'].includes(action)) throw new Error(`不支持的动作: ${action}`)
           sendJson(res, 200, { ok: true, ...simService.action(action), state: simService.state() })
+          return
+        }
+        case ROUTES.clarifyAnswer: {
+          const questionId = String(body.questionId ?? '')
+          const answer = String(body.answer ?? '').trim()
+          if (!questionId || !answer) throw new Error('需要 questionId 与 answer')
+          const question = answerQuestion(service.store, questionId, answer, 'web')
+          sendJson(res, 200, { ok: true, question })
+          return
+        }
+        case ROUTES.clarifyAdd: {
+          const requirementId = String(body.requirementId ?? '')
+          const question = String(body.question ?? '').trim()
+          if (!requirementId || !question) throw new Error('需要 requirementId 与 question')
+          const added = addQuestion(service.store, {
+            requirementId,
+            question,
+            why: body.why ? String(body.why) : undefined,
+            origin: 'manual',
+          }, 'web')
+          sendJson(res, 200, { ok: true, question: added })
+          return
+        }
+        case ROUTES.itemPropose: {
+          const requirementId = String(body.requirementId ?? '')
+          const content = String(body.content ?? '').trim()
+          if (!requirementId || !content) throw new Error('需要 requirementId 与 content')
+          const item = proposeItem(service.store, {
+            requirementId,
+            content,
+            acceptance: Array.isArray(body.acceptance) ? (body.acceptance as never[]) : [],
+            priority: body.priority === 'high' ? 'high' : body.priority === 'low' ? 'low' : 'medium',
+            origin: String(body.origin ?? 'manual'),
+          }, 'web')
+          sendJson(res, 200, { ok: true, item })
+          return
+        }
+        case ROUTES.itemChange: {
+          const itemId = String(body.itemId ?? '')
+          if (!itemId) throw new Error('需要 itemId')
+          const outcome = changeItem(service.store, {
+            itemId,
+            content: body.content ? String(body.content) : undefined,
+            acceptance: Array.isArray(body.acceptance) ? (body.acceptance as never[]) : undefined,
+            source: ['customer', 'implementation-finding', 'test-finding'].includes(String(body.source))
+              ? (String(body.source) as 'customer' | 'implementation-finding' | 'test-finding')
+              : 'customer',
+            summary: String(body.summary ?? '需求变更'),
+            detail: body.detail ? String(body.detail) : undefined,
+          }, 'web')
+          service.workbench.refreshStates('web')
+          sendJson(res, 200, { ok: true, ...outcome })
+          return
+        }
+        case ROUTES.defineDraft: {
+          const requirementId = String(body.requirementId ?? '')
+          const define = draftDefine(service.store, requirementId, (body.body as Record<string, unknown>) ?? {}, 'web')
+          sendJson(res, 200, { ok: true, define })
+          return
+        }
+        case ROUTES.defineSubmit: {
+          const define = submitDefine(service.store, String(body.defineId ?? ''), 'web')
+          sendJson(res, 200, { ok: true, define })
+          return
+        }
+        case ROUTES.defineReview: {
+          const result = reviewDefine(service.store, {
+            defineId: String(body.defineId ?? ''),
+            decision: body.decision === 'approve' ? 'approve' : body.decision === 'comment' ? 'comment' : 'request-changes',
+            reviewer: String(body.reviewer ?? 'web'),
+            comments: Array.isArray(body.comments) ? (body.comments as Array<{ itemId?: string; section?: string; text: string }>) : [],
+          })
+          service.workbench.refreshStates('web')
+          sendJson(res, 200, { ok: true, define: result.define, requirement: result.requirement })
           return
         }
         case ROUTES.caseRun: {

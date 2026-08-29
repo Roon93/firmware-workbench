@@ -263,7 +263,8 @@ const TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   reserved: ['running', 'ready', 'cancelled'],
   running: ['verifying', 'failed_product', 'failed_test', 'failed_infra', 'cancelled'],
   verifying: ['succeeded', 'failed_product', 'failed_test', 'failed_infra'],
-  succeeded: [],
+  // 返工例外(提案 §3.2 变更传导):需求变更把已完成任务标 stale 回 planned,由变更记录留痕
+  succeeded: ['planned'],
   failed_product: ['planned', 'quarantined'],
   failed_test: ['planned', 'quarantined'],
   failed_infra: ['planned', 'quarantined'],

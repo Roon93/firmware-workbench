@@ -304,6 +304,8 @@ export interface Task extends TaskDefinition {
   id: string
   status: TaskStatus
   blockedReason?: string
+  /** 需求/契约变更传导的过期标记(提案 §3.2):任务需重评估后才能再次进入调度 */
+  staleReason?: string
   createdAt: string
   startedAt?: string
   finishedAt?: string

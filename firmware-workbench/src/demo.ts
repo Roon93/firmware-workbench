@@ -1,7 +1,16 @@
 import type { WorkbenchStore } from './core/store.js'
 import { seedResources } from './core/resources.js'
 import { Workbench } from './core/workbench.js'
-import { applyDefine, approveRequirement, importRequirement } from './core/requirement.js'
+import {
+  importRawRequirement,
+  listQuestions,
+  answerQuestion,
+  proposeItem,
+  draftDefine,
+  submitDefine,
+  reviewDefine,
+  type ItemAcceptance,
+} from './core/align.js'
 import { createContract, freezeContract, setGateDecision } from './core/contract.js'
 import { insertTestCase } from './core/testing.js'
 import type { TestCaseRow } from './core/testing.js'
@@ -24,10 +33,14 @@ const CONTRACTS: Array<{ name: string; version: string; summary: string }> = [
 
 /** 重放前清理:清空任务、租约、测试运行与产物,保留需求/契约/用例定义 */
 export function resetDemoState(store: WorkbenchStore): void {
+  // v2:完整清空对齐层 + 执行层(需求重新从 clarifying 走);契约、用例目录与资源保留
   store.db.exec(
-    'DELETE FROM leases; DELETE FROM test_runs; DELETE FROM artifacts; DELETE FROM tasks; DELETE FROM gates;'
+    `DELETE FROM leases; DELETE FROM test_runs; DELETE FROM artifacts; DELETE FROM tasks; DELETE FROM gates;
+     DELETE FROM clarify_questions; DELETE FROM requirement_items; DELETE FROM define_versions;
+     DELETE FROM reviews; DELETE FROM decisions; DELETE FROM change_records;
+     DELETE FROM acceptance_criteria; DELETE FROM requirements;`
   )
-  store.appendEvent('system', 'demo.reset', { note: '重放前清理任务、运行记录与门禁签署' })
+  store.appendEvent('system', 'demo.reset', { note: '重置工程:对齐层与执行层清空,契约/用例/资源保留' })
 }
 
 export function seedDemo(
@@ -38,79 +51,32 @@ export function seedDemo(
   if (opts.reset) resetDemoState(store)
   seedResources(store)
 
-  // ---------- 需求与 Define(方案 19.1) ----------
-  const requirement = importRequirement(store, {
-    id: DEMO_REQUIREMENT_ID,
-    title: '面板发起单页黑白复印',
-    originalText: '用户在设备面板选择"复印",放入一张 A4 原稿,设备以产品定义的分辨率完成扫描、图像处理,并由真实打印引擎输出一张黑白纸张。',
-    priority: 'high',
-    actor,
-  })
-
-  applyDefine(
+  // ---------- 需求(v2:多需求集合 + 澄清问答,提案 §3.1/G2) ----------
+  importRawRequirement(
     store,
     {
-      requirementId: requirement.id,
-      actor,
-      define: {
-        actors: ['local-user'],
-        preconditions: ['device-ready', 'a4-paper-available', 'original-on-flatbed'],
-        normalFlow: [
-          '用户在面板选择复印',
-          '设备进入 SCANNING 并完成 A4 平板 300dpi 扫描',
-          '图像流水线完成校正与半色调',
-          '引擎输出 1 页黑白 A4',
-          '面板与作业状态显示 COMPLETED',
-        ],
-        alternativeFlows: ['用户在扫描前取消:作业 CANCELLED,设备回到就绪'],
-        errorFlows: [
-          '扫描超时:作业 FAILED,错误码 SCAN-TIMEOUT',
-          '打印前缺纸:面板提示 PAPER_EMPTY,作业 WAITING_FOR_PAPER',
-          '引擎可恢复错误:自动重试一次',
-        ],
-        recoveryRules: [
-          '缺纸后补纸:作业继续输出并 COMPLETED',
-          '缺纸未恢复:作业 FAILED,清理任务恢复资源健康',
-          '取消后设备回到就绪,无残留作业',
-        ],
-        functionalRequirements: ['单页黑白复印闭环', '作业状态与面板一致', '取消即时生效'],
-        nonFunctionalRequirements: {
-          performance: ['(待产品负责人签署:首张时间目标)'],
-          resource: ['(待签署:CPU/内存预算)'],
-          reliability: ['异常后设备必须回到已知状态'],
-          security: ['无外部网络依赖'],
-          maintainability: ['作业全链路携带同一 job_id'],
-        },
-        outOfScope: ['pc-driver-development'],
-        dependencies: ['scanner-interface', 'image-pipeline', 'print-engine-interface', 'panel-ui'],
-        openQuestions: [],
-        risks: ['真实扫描器/引擎接口未冻结(Phase 0 事实)'],
-      },
-      criteria: [
-        {
-          title: '模拟层:虚拟设备完成单页黑白复印',
-          method: 'automated',
-          threshold: '虚拟设备终态 COMPLETED 且出纸 1 页',
-          maxLevel: 'L1',
-        },
-        {
-          title: '模拟层:必选异常场景符合作业状态机(取消/超时/缺纸恢复)',
-          method: 'automated',
-          threshold: '全部场景终态与转移表预期一致',
-          maxLevel: 'L1',
-        },
-        {
-          title: '真机:面板发起真实扫描并真实出纸 1 页',
-          method: 'manual',
-          threshold: '真实纸张输出且作业时间线完整',
-          maxLevel: 'L4',
-        },
-      ],
+      id: DEMO_REQUIREMENT_ID,
+      title: '面板发起单页黑白复印',
+      text: '用户在设备面板选择"复印",放入一张 A4 原稿,设备以产品定义的分辨率完成扫描、图像处理,并由真实打印引擎输出一张黑白纸张。',
+      priority: 'high',
     },
+    actor,
   )
+  // 第二需求(G2 多需求演示):停留在 clarifying,由用户后续推进
+  importRawRequirement(
+    store,
+    {
+      title: '扫描件保存到 U 盘',
+      text: '用户将 U 盘插入设备前面板端口,扫描完成后设备将 PDF/JPG 写入 U 盘指定目录,并在面板显示保存结果;U 盘拔出或写失败时给出明确提示。',
+      priority: 'medium',
+    },
+    actor,
+  )
+
+  // ---------- 门禁与契约:引导模式下由用户逐步签署(方案 7.2 阶段门禁) ----------
   // ---------- 门禁与契约:引导模式下由用户逐步签署(方案 7.2 阶段门禁) ----------
   if (opts.autoGate) {
-    approveDefineGate(store, actor)
+    autoAlignRequirement(store, DEMO_REQUIREMENT_ID, actor)
     freezeContractGate(store, actor)
   }
 
@@ -135,7 +101,8 @@ export function seedDemo(
         title: 'Define:澄清单页黑白复印需求与验收',
         requirementRefs: [DEMO_REQUIREMENT_ID],
         acceptanceRefs: [],
-        note: '已随种子完成(G1 定义完成)',
+        dependencies: [{ kind: 'gate_requires', ref: `G1-${DEMO_REQUIREMENT_ID}` }],
+        note: 'G1 门禁由需求评审批准后解锁',
       },
       actor,
     ).id,
@@ -147,8 +114,11 @@ export function seedDemo(
         type: 'contract',
         title: '冻结状态机/接口/错误码契约 v1',
         requirementRefs: [DEMO_REQUIREMENT_ID],
-        dependencies: [{ kind: 'hard_after', ref: 'TASK-COPY-0001' }],
-        note: '已随种子冻结(G3 契约基线)',
+        dependencies: [
+          { kind: 'hard_after', ref: 'TASK-COPY-0001' },
+          { kind: 'gate_requires', ref: `G1-${DEMO_REQUIREMENT_ID}` },
+        ],
+        note: 'G1 批准后可执行;产物随种子冻结(G3 契约基线)',
       },
       actor,
     ).id,
@@ -345,7 +315,7 @@ export function seedDemo(
       title: '面板发起单页黑白复印(模拟主流程)',
       level: 'L1',
       requirementRefs: [DEMO_REQUIREMENT_ID],
-      acceptanceRefs: ['AC-COPY-0001-0001'],
+      acceptanceRefs: ['ITEM-COPY-0001-01-AC1'],
       preconditions: ['virtual-device-ready', 'a4-original-present'],
       steps: [{ action: 'panel.copy.start' }, { expect: 'job.state == COMPLETED' }, { expect: 'pages_out == 1' }],
       resources: [{ id: 'sim/scanner', units: 1 }, { id: 'sim/engine', units: 1 }],
@@ -357,7 +327,7 @@ export function seedDemo(
       title: '扫描前取消',
       level: 'L1',
       requirementRefs: [DEMO_REQUIREMENT_ID],
-      acceptanceRefs: ['AC-COPY-0001-0002'],
+      acceptanceRefs: ['ITEM-COPY-0001-02-AC1'],
       preconditions: ['virtual-device-ready'],
       steps: [{ action: 'panel.copy.start' }, { action: 'panel.copy.cancel' }, { expect: 'job.state == CANCELLED' }],
       resources: [{ id: 'sim/scanner', units: 1 }, { id: 'sim/engine', units: 1 }],
@@ -369,7 +339,7 @@ export function seedDemo(
       title: '扫描超时进入 FAILED',
       level: 'L1',
       requirementRefs: [DEMO_REQUIREMENT_ID],
-      acceptanceRefs: ['AC-COPY-0001-0002'],
+      acceptanceRefs: ['ITEM-COPY-0001-02-AC1'],
       preconditions: ['virtual-device-ready'],
       steps: [{ action: 'inject.scan-timeout' }, { action: 'panel.copy.start' }, { expect: 'job.state == FAILED' }],
       resources: [{ id: 'sim/scanner', units: 1 }],
@@ -381,7 +351,7 @@ export function seedDemo(
       title: '复印缺纸后补纸恢复',
       level: 'L1',
       requirementRefs: [DEMO_REQUIREMENT_ID],
-      acceptanceRefs: ['AC-COPY-0001-0002'],
+      acceptanceRefs: ['ITEM-COPY-0001-02-AC1'],
       preconditions: ['virtual-device-ready', 'tray.paper_count == 0'],
       steps: [
         { action: 'panel.copy.start' },
@@ -399,7 +369,7 @@ export function seedDemo(
       title: '缺纸未恢复作业终止',
       level: 'L1',
       requirementRefs: [DEMO_REQUIREMENT_ID],
-      acceptanceRefs: ['AC-COPY-0001-0002'],
+      acceptanceRefs: ['ITEM-COPY-0001-02-AC1'],
       preconditions: ['virtual-device-ready', 'tray.paper_count == 0'],
       steps: [{ action: 'panel.copy.start' }, { expect: 'job.state == WAITING_FOR_PAPER' }, { action: 'give-up' }, { expect: 'job.state == FAILED' }],
       resources: [{ id: 'sim/engine', units: 1 }],
@@ -411,7 +381,7 @@ export function seedDemo(
       title: '真机:真实扫描到真实出纸(L4)',
       level: 'L4',
       requirementRefs: [DEMO_REQUIREMENT_ID],
-      acceptanceRefs: ['AC-COPY-0001-0003'],
+      acceptanceRefs: ['ITEM-COPY-0001-01-AC2'],
       preconditions: ['device.state == READY', 'firmware-flashed'],
       steps: [{ action: 'panel.copy.start(vnc)' }, { expect: 'job.state == COMPLETED' }, { human: 'verify-output-sheet' }],
       resources: [
@@ -427,7 +397,7 @@ export function seedDemo(
       title: '真机:复印缺纸后补纸恢复(L4,附录 B 原型)',
       level: 'L4',
       requirementRefs: [DEMO_REQUIREMENT_ID],
-      acceptanceRefs: ['AC-COPY-0001-0003'],
+      acceptanceRefs: ['ITEM-COPY-0001-01-AC2'],
       preconditions: ['device.state == READY', 'tray.default.paper_count == 0', 'scanner.original_present == true'],
       steps: [
         { action: 'panel.copy.start' },
@@ -481,16 +451,6 @@ export function seedDemo(
   return { requirementId: DEMO_REQUIREMENT_ID, taskIds }
 }
 
-/**
- * 引导式流程的三个签署动作(方案 7.2 G1/G3):
- * 批准 Define、冻结全部契约并批准 G3。返回当前需求状态。
- */
-export function approveDefineGate(store: WorkbenchStore, actor = 'web'): { requirementId: string; status: string } {
-  const requirement = getRequirementForDemo(store)
-  const approved = approveRequirement(store, requirement.id, actor)
-  return { requirementId: approved.id, status: approved.status }
-}
-
 export function freezeContractGate(
   store: WorkbenchStore,
   actor = 'web',
@@ -519,34 +479,113 @@ export function freezeContractGate(
   return { contracts: frozen, gate: 'G3-CONTRACT-BASELINE' }
 }
 
-/** 用户导入自己的需求(P0):更新种子需求的原始文本,重置工程等待重新评审 */
+/**
+ * 主需求的"对齐快速通道"(自动模式/CLI 用):逐题回答模板问题 → 生成需求条目 →
+ * 起草 Define v1 → 提交 → 批准(G1)。引导模式(前端)会拆成逐步操作,复用同一组 align 原语。
+ */
+export function autoAlignRequirement(store: WorkbenchStore, requirementId: string, actor = 'web'): {
+  questionsAnswered: number
+  items: string[]
+  defineId: string
+  decision: string
+} {
+  const req = getRequirementById(store, requirementId)
+  if (!req) throw new Error(`需求不存在: ${requirementId}`)
+
+  // 1) 模板问题的种子答案(演示工程语义;真实场景由人逐题回答)
+  const seedAnswers: Record<string, string> = {
+    '目标纸张规格与介质范围是什么?': '仅 A4 普通纸(80-120g/m²)',
+    '单双面、份数与缩放需求?': '单面单份 1:1(本 MVP 不做双面/多份)',
+    '异常场景(缺纸/卡纸/开盖/取消)各自的恢复策略是什么?': '缺纸补纸后继续并完成;卡纸/开盖按引擎错误终止并回就绪;取消立即生效',
+    '性能有量化目标吗(首张时间/连续速度)?': '暂无,记为待产品签署(Phase 0 后补)',
+    '是否涉及用户数据留存或网络暴露面?': '无数据留存、无网络服务',
+  }
+  let answered = 0
+  for (const question of listQuestions(store, requirementId)) {
+    if (question.status !== 'open') continue
+    const answer = seedAnswers[question.question]
+    if (!answer) throw new Error(`问题缺少种子答案: ${question.question}`)
+    answerQuestion(store, question.id, answer, actor)
+    answered += 1
+  }
+
+  // 2) 需求条目(验收标准与测试用例引用对齐)
+  const items: Array<{ id: string; content: string; acceptance: ItemAcceptance[] }> = [
+    {
+      id: 'ITEM-COPY-0001-01',
+      content: '单页黑白复印闭环:面板发起 → A4 平板 300dpi 扫描 → 图像处理 → 引擎出纸 1 页 → 面板 COMPLETED',
+      acceptance: [
+        { title: '模拟层:虚拟设备完成单页黑白复印', method: 'automated', threshold: '终态 COMPLETED 且出纸 1 页', maxLevel: 'L1' },
+        { title: '真机:面板发起真实扫描并真实出纸 1 页', method: 'manual', threshold: '真实纸张输出且作业时间线完整', maxLevel: 'L4' },
+      ],
+    },
+    {
+      id: 'ITEM-COPY-0001-02',
+      content: '异常语义:扫描超时 FAILED、缺纸 WAITING_FOR_PAPER、引擎可恢复错误自动重试;全部场景符合作业状态机',
+      acceptance: [
+        { title: '模拟层:必选异常场景符合作业状态机(取消/超时/缺纸恢复)', method: 'automated', threshold: '全部场景终态与转移表预期一致', maxLevel: 'L1' },
+      ],
+    },
+  ]
+  const itemIds: string[] = []
+  for (const item of items) {
+    const created = proposeItem(
+      store,
+      {
+        requirementId,
+        content: item.content,
+        acceptance: item.acceptance,
+        priority: 'high',
+        origin: 'template',
+      },
+      actor,
+    )
+    // 对齐引用 id(测试用例按此引用)
+    store.db.prepare('UPDATE requirement_items SET id = ? WHERE id = ?').run(item.id, created.id)
+    itemIds.push(item.id)
+  }
+
+  // 3) Define v1:起草 → 提交 → 批准(G1)
+  const define = draftDefine(
+    store,
+    requirementId,
+    {
+      actors: ['local-user'],
+      preconditions: ['device-ready', 'a4-paper-available', 'original-on-flatbed'],
+      normalFlow: ['面板发起', '扫描', '图像处理', '出纸 1 页', 'COMPLETED'],
+      errorFlows: ['扫描超时 FAILED', '缺纸 WAITING_FOR_PAPER', '引擎可恢复错误重试'],
+      recoveryRules: ['补纸后继续', '未恢复终止并清理', '取消回就绪'],
+      outOfScope: ['pc-driver-development'],
+      note: '由 autoAlignRequirement 自动起草并批准(自动演示/CLI 路径)',
+    },
+    actor,
+  )
+  submitDefine(store, define.id, actor)
+  const review = reviewDefine(store, {
+    defineId: define.id,
+    decision: 'approve',
+    reviewer: actor,
+    comments: [],
+  })
+  return { questionsAnswered: answered, items: itemIds, defineId: review.define.id, decision: review.define.status }
+}
+
+function getRequirementById(store: WorkbenchStore, id: string): { id: string; status: string } | undefined {
+  const row = store.db.prepare('SELECT id, status FROM requirements WHERE id = ?').get(id) as
+    | { id: string; status: string }
+    | undefined
+  return row ?? undefined
+}
+
+/** 导入用户需求(v2 多需求):新增一条需求进入 clarifying,并自动生成模板澄清问题 */
 export function importUserRequirement(
   store: WorkbenchStore,
   input: { title: string; text: string },
   actor = 'web',
-): { requirementId: string; status: string } {
-  // 完整重播种(含 Define 模板与任务 DAG),再覆盖为用户的原始需求;状态保持 defined 等待评审批准
-  seedDemo(store, actor, { reset: true, autoGate: false })
-  store.db
-    .prepare('UPDATE requirements SET title = ?, original_text = ?, updated_at = ? WHERE id = ?')
-    .run(input.title, input.text, store.now(), DEMO_REQUIREMENT_ID)
-  store.appendEvent(actor, 'requirement.import', {
-    id: DEMO_REQUIREMENT_ID,
-    title: input.title,
-    note: '用户自定义原始需求;Define 模板已生成,等待评审批准(G1)',
-  })
-  return { requirementId: DEMO_REQUIREMENT_ID, status: 'defined' }
-}
-
-function getRequirementForDemo(store: WorkbenchStore): { id: string; status: string } {
-  const row = store.db
-    .prepare('SELECT id, status FROM requirements WHERE id = ?')
-    .get(DEMO_REQUIREMENT_ID) as { id: string; status: string } | undefined
-  if (!row) throw new Error('工程尚未装载:请先导入需求或装载种子')
-  if (row.status !== 'defined') {
-    throw new Error(`需求状态为 ${row.status},只有 defined(Define 已就绪)可批准;请先装载种子或导入需求`)
-  }
-  return row
+): { requirementId: string; status: string; questions: number } {
+  const requirement = importRawRequirement(store, { title: input.title, text: input.text }, actor)
+  const questions = listQuestions(store, requirement.id).length
+  return { requirementId: requirement.id, status: requirement.status, questions }
 }
 
 function cliEntrypoint(): string {

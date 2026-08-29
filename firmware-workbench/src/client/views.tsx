@@ -70,8 +70,8 @@ export function OverviewView(props: { data: WbData; onGoto: (view: string) => vo
       <div className="wb-grid wb-grid--2col" style={{ marginBottom: 'var(--wb-sp-3)' }}>
         <Card title="需求与基线">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <span className="wb-mono">{data.snapshot?.requirement?.id ?? 'REQ-COPY-0001'}</span>
-            <span style={{ fontWeight: 600, fontSize: 13 }}>{data.snapshot?.requirement?.title ?? '面板发起单页黑白复印'}</span>
+            <span className="wb-mono">{data.snapshot?.requirements?.[0]?.id ?? 'REQ-COPY-0001'}</span>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>{data.snapshot?.requirements?.[0]?.title ?? '面板发起单页黑白复印'}</span>
           </div>
           <div className="wb-faint" style={{ fontSize: 12, lineHeight: 1.9 }}>
             产品基线:PRD-A4-MONO-MFP-v0.1
@@ -183,7 +183,7 @@ export function AcceptanceView(props: { data: WbData }): React.JSX.Element {
   const evaluate = async (): Promise<void> => {
     setBusy(true)
     try {
-      await fetchJson('/acceptance', { method: 'POST', body: JSON.stringify({ requirementId: data.snapshot?.requirement?.id ?? 'REQ-COPY-0001' }) })
+      await fetchJson('/acceptance', { method: 'POST', body: JSON.stringify({ requirementId: data.snapshot?.requirements?.[0]?.id ?? 'REQ-COPY-0001' }) })
       await data.reloadReport()
       show('已重新评估(L1 口径)')
     } catch (error) {
@@ -198,7 +198,7 @@ export function AcceptanceView(props: { data: WbData }): React.JSX.Element {
     <div className="wb-view">
       <ViewHead
         title="需求与验收"
-        sub={data.snapshot?.requirement?.id}
+        sub={data.snapshot?.requirements?.map(req => req.id).join(' · ')}
         actions={
           <>
             <button className="wb-btn" disabled={busy} onClick={() => void evaluate()}>
@@ -212,7 +212,7 @@ export function AcceptanceView(props: { data: WbData }): React.JSX.Element {
           </>
         }
       />
-      {!data.snapshot?.requirement ? (
+      {(data.snapshot?.requirements?.length ?? 0) === 0 ? (
         <Card>
           <EmptyState icon="file-text" title="还没有需求" hint="先到演示中心一键装载,或用 fwctl requirement import 导入" />
         </Card>
@@ -245,8 +245,8 @@ export function AcceptanceView(props: { data: WbData }): React.JSX.Element {
           </div>
 
           <div className="wb-grid wb-grid--2col">
-            <Card title="需求 Define" sub={data.snapshot.requirement.id}>
-              <div className="wb-quote">"{data.snapshot.requirement.title}"</div>
+            <Card title="需求 Define" sub={data.snapshot?.requirements?.[0]?.id}>
+              <div className="wb-quote">"{data.snapshot?.requirements?.[0]?.title}"</div>
               <div className="wb-side__title">主流程</div>
               <ol className="wb-list-num">
                 <li>用户在面板选择复印</li>

@@ -2,7 +2,7 @@ import { defineTool, type JsonValue, type ToolDefinition } from '@deepseek-ai/ds
 import { service } from './service.js'
 import { seedDemo } from './demo.js'
 import { runTaskLocally } from './core/runner/local.js'
-import { importRequirement } from './core/requirement.js'
+import { importRawRequirement, listQuestions } from './core/align.js'
 import { releaseTaskLeases } from './core/resources.js'
 import { evaluateRequirement, generateAcceptanceBundle } from './core/acceptance.js'
 import { recordTestRun } from './core/testing.js'
@@ -86,7 +86,12 @@ export function createPrinterTools(): { tools: PrinterTools; names: string[] } {
     output: { schema: permissiveObjectSchema, render: renderJson },
     timeoutMs: 15_000,
     async execute(args: { title: string; text: string }) {
-      return importRequirement(service.store, { title: args.title, originalText: args.text, actor: 'dsh-tool' })
+      const requirement = importRawRequirement(service.store, { title: args.title, text: args.text }, 'dsh-tool')
+      return {
+        requirementId: requirement.id,
+        status: requirement.status,
+        questions: listQuestions(service.store, requirement.id).length,
+      }
     },
     presentCall: args => ({
       card: 'generic',

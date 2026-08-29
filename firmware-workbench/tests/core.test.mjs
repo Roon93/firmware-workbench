@@ -4,9 +4,9 @@ import { WorkbenchStore } from '../lib/core/store.js'
 import { Workbench } from '../lib/core/workbench.js'
 import { validateDag, evaluateRunnable, computeCriticalPath, assertTransition } from '../lib/core/dag.js'
 import { seedResources, acquireLeases, releaseTaskLeases, sweepExpiredLeases, quarantineResource, listLeases } from '../lib/core/resources.js'
-import { importRequirement, applyDefine, approveRequirement, validateDefine } from '../lib/core/requirement.js'
 import { createContract, freezeContract, updateContractBody, setGateDecision } from '../lib/core/contract.js'
-import { seedDemo, resetDemoState, approveDefineGate, freezeContractGate, DEMO_REQUIREMENT_ID } from '../lib/demo.js'
+import { seedDemo, resetDemoState, autoAlignRequirement, freezeContractGate, DEMO_REQUIREMENT_ID } from '../lib/demo.js'
+import { importRawRequirement, listQuestions, answerQuestion, proposeItem, draftDefine, submitDefine, reviewDefine, changeItem, clarifyComplete, listItems, listDefineVersions } from '../lib/core/align.js'
 import { nextJobState, JOB_TRANSITIONS } from '../lib/sim/job-model.js'
 import { VirtualDevice, SCENARIO_EXPECTATIONS } from '../lib/sim/virtual-device.js'
 import { EvidenceStore } from '../lib/core/evidence/store.js'
@@ -156,17 +156,76 @@ test('租约过期:资源进入隔离待清理(方案 9.4)', () => {
 
 // ---------- 需求与契约 ----------
 
-test('需求 Define 校验:缺验收标准或未澄清问题时不通过', () => {
-  const { store, dir } = freshDb('req')
-  const req = importRequirement(store, { title: 'T', originalText: 'X', id: 'REQ-T-0001' })
-  assert.equal(validateDefine({}, []).length >= 4, true)
-  const { errors } = applyDefine(store, {
+test('对齐层:澄清门未关不允许起草 Define;答完可起草', () => {
+  const { store, dir } = freshDb('clarify')
+  const req = importRawRequirement(store, { title: 'T', text: 'X', id: 'REQ-CL-0001' })
+  const questions = listQuestions(store, req.id)
+  assert.ok(questions.length >= 5, '模板问题已生成')
+  assert.equal(clarifyComplete(store, req.id), false)
+  assert.throws(() => draftDefine(store, req.id, {}), /澄清未完成/)
+  for (const q of questions) answerQuestion(store, q.id, '测试答案', 'tester')
+  assert.equal(clarifyComplete(store, req.id), true)
+  assert.doesNotThrow(() => proposeItem(store, { requirementId: req.id, content: '条目', origin: 'template' }, 'tester'))
+  assert.doesNotThrow(() => draftDefine(store, req.id, { note: 'test' }, 'tester'))
+  safeClose(store, dir)
+})
+
+test('对齐层:三态评审 —— request-changes 打回,approve 物化 AC 并批 G1', () => {
+  const { store, dir } = freshDb('review')
+  const req = importRawRequirement(store, { title: 'T', text: 'X', id: 'REQ-RV-0001' })
+  for (const q of listQuestions(store, req.id)) answerQuestion(store, q.id, '答案', 'tester')
+  proposeItem(store, {
     requirementId: req.id,
-    define: { normalFlow: ['a'], errorFlows: ['b'], recoveryRules: ['c'], outOfScope: ['d'], openQuestions: ['q'] },
-    criteria: [{ title: 'AC1', method: 'automated', maxLevel: 'L1' }],
-  })
-  assert.ok(errors.some(e => e.includes('未澄清')))
-  assert.equal(errors.length > 0, true)
+    content: '条目 A',
+    acceptance: [{ title: 'AC-A', method: 'automated', maxLevel: 'L1' }],
+    origin: 'template',
+  }, 'tester')
+  const define = draftDefine(store, req.id, {}, 'tester')
+  submitDefine(store, define.id, 'tester')
+
+  // request-changes:版本 rejected、需求回 defining、条目回 proposed
+  const rc = reviewDefine(store, { defineId: define.id, decision: 'request-changes', reviewer: 'rev', comments: [{ itemId: listItems(store, req.id)[0].id, text: '恢复策略未定义' }] })
+  assert.equal(rc.define.status, 'rejected')
+  assert.equal(rc.requirement.status, 'defining')
+
+  // 修订(v2)后批准:条目 approved、AC 物化、G1 批准
+  const define2 = draftDefine(store, req.id, { note: 'v2' }, 'tester')
+  assert.equal(define2.version, 2)
+  submitDefine(store, define2.id, 'tester')
+  const approved = reviewDefine(store, { defineId: define2.id, decision: 'approve', reviewer: 'rev' })
+  assert.equal(approved.define.status, 'approved')
+  assert.equal(approved.requirement.status, 'approved')
+  assert.equal(listDefineVersions(store, req.id).find(v => v.version === 1).status, 'superseded', '批准后旧版本链被取代')
+  const acs = store.db.prepare('SELECT id FROM acceptance_criteria WHERE requirement_id = ?').all(req.id)
+  assert.equal(acs.length, 1)
+  assert.ok(store.db.prepare('SELECT id FROM gates WHERE id = ? AND decision = ?').get(`G1-${req.id}`, 'approved'))
+  safeClose(store, dir)
+})
+
+test('对齐层:变更传导 —— 条目 changed、任务 stale 回 planned、G1 回 pending', () => {
+  const { store, dir } = freshDb('change')
+  seedDemo(store, 'test', { reset: true, autoGate: true })
+  const workbench = new Workbench(store)
+  // 推进一个已完成任务
+  const r = workbench.acquireTask('TASK-COPY-0010', 'test')
+  assert.equal(r.ok, true)
+  workbench.startTask('TASK-COPY-0010', 'test')
+  workbench.beginVerify('TASK-COPY-0010', 'test')
+  workbench.completeTask('TASK-COPY-0010', 'test')
+  assert.equal(workbench.getTask('TASK-COPY-0010').status, 'succeeded')
+
+  const outcome = changeItem(store, {
+    itemId: 'ITEM-COPY-0001-01',
+    content: '单页黑白复印闭环(份数支持 1-99)',
+    source: 'customer',
+    summary: '份数从 1 改为支持 1-99',
+  }, 'product')
+  assert.equal(outcome.requirementId, DEMO_REQUIREMENT_ID)
+  assert.ok(outcome.staleTasks.includes('TASK-COPY-0010'), '已完成任务被打回 stale')
+  const task = workbench.getTask('TASK-COPY-0010')
+  assert.equal(task.status, 'planned')
+  assert.ok(task.staleReason?.includes('变更'))
+  assert.ok(store.db.prepare('SELECT id FROM gates WHERE id = ? AND decision = ?').get(`G1-${DEMO_REQUIREMENT_ID}`, 'pending'))
   safeClose(store, dir)
 })
 
@@ -182,7 +241,7 @@ test('门禁批准后 gate_requires 解除阻塞', () => {
   const { store, dir } = freshDb('gate')
   const workbench = new Workbench(store)
   seedResources(store)
-  importRequirement(store, { title: 'T', originalText: 'X', id: 'REQ-G-0001' })
+  importRawRequirement(store, { title: 'T', text: 'X', id: 'REQ-G-0001' })
   workbench.createTask({ id: 'TASK-G-1', type: 'implementation', title: 'gated', requirementRefs: ['REQ-G-0001'], dependencies: [{ kind: 'gate_requires', ref: 'G-TEST' }] })
   workbench.refreshStates()
   assert.equal(workbench.getTask('TASK-G-1').status, 'blocked_gate')
@@ -313,7 +372,8 @@ test('引导模式:门禁未签署时任务 blocked_gate,签署后解锁', () =>
   workbench.refreshStates('test')
   assert.equal(workbench.getTask('TASK-COPY-0010').status, 'blocked_gate')
 
-  approveDefineGate(store, 'test') // 幂等(Define 已随种子就绪)
+  const aligned = autoAlignRequirement(store, DEMO_REQUIREMENT_ID, 'test')
+  assert.equal(aligned.decision, 'approved')
   freezeContractGate(store, 'test')
   workbench.refreshStates('test')
   assert.equal(workbench.getTask('TASK-COPY-0010').status, 'ready')
@@ -333,12 +393,14 @@ test('证据仓内容寻址:同内容同哈希、哈希校验', () => {
   safeClose(store, dir)
 })
 
-test('resetDemoState 保留需求契约、清空任务与运行记录', () => {
+test('resetDemoState 清空对齐层与执行层,保留契约/用例/资源', () => {
   const { store, dir } = freshDb('reset')
   seedDemo(store, 'test', { autoGate: true })
   resetDemoState(store)
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 0)
-  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM requirements').get().n, 1)
-  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM contracts').get().n, 5)
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM requirements').get().n, 0, '需求清空(重新装载)')
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM clarify_questions').get().n, 0)
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM contracts').get().n, 5, '契约保留')
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM test_cases').get().n, 7, '用例目录保留')
   safeClose(store, dir)
 })
