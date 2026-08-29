@@ -1,0 +1,13 @@
+# Spike 1+2:并行任务与依赖等待(phase-0 第 8 节 1-2 项)
+env:
+  - PATH: "D:/roon/workflow_2/dsh-env/runtime/node;${PATH}"
+max_active_steps: 4
+steps:
+  - name: build-a
+    command: node -e "console.log('build-a done')"
+  - name: build-b
+    command: node -e "console.log('build-b done')"
+  - name: unit-test-waits-a
+    command: node -e "console.log('unit test after build-a')"
+    depends:
+      - build-a

@@ -1,0 +1,15 @@
+# Spike 5:人工门禁(human.task,phase-0 第 8 节 5 项)
+env:
+  - PATH: "D:/roon/workflow_2/dsh-env/runtime/node;${PATH}"
+steps:
+  - name: prepare
+    command: node -e "console.log('candidate ready')"
+  - name: human-gate
+    action: human.task
+    id: review
+    with:
+      prompt: "验收放行:确认候选版本证据完整并签署"
+  - name: after-approval
+    command: node -e "console.log('approved, continuing')"
+    depends:
+      - human-gate

@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "dsh-firmware-workbench": "file:D:/roon/workflow_2/dsh-env/packages/dsh-firmware-workbench-0.1.0.tgz"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-firmware-workbench"
+      ]
+    }
+  }
+}

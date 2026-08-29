@@ -1,0 +1,11 @@
+# Spike 3+6:资源受限排队(max_active_steps=1)与取消(phase-0 第 8 节 3/6 项)
+env:
+  - PATH: "D:/roon/workflow_2/dsh-env/runtime/node;${PATH}"
+max_active_steps: 1
+steps:
+  - name: device-task-long
+    command: node -e "console.log('holding device for 30s'); setTimeout(()=>{console.log('done')},30000)"
+  - name: device-task-queued
+    command: node -e "console.log('queued task ran')"
+    depends:
+      - device-task-long

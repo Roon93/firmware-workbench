@@ -1,0 +1,4 @@
+# Mount dsh-firmware-workbench as one profile bundle layer.
+- insert:
+    - id: dsh-firmware-workbench
+      name: dsh-firmware-workbench

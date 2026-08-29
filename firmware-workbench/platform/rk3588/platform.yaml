@@ -1,0 +1,31 @@
+# RK3588 Platform Pack(方案 10.1)
+# 真机接入前的事实以 phase-0-fact-freeze-checklist.md 为准;以下为 MVP 骨架占位。
+platform: rk3588
+bsp: unfrozen-phase-0
+container: printer-fw-rk3588:bsp-unfrozen
+flash-provider: rockchip-vendor
+board-profile: printer-rk3588-rev-a
+
+product: PRD-A4-MONO-MFP
+hardware_revision: simulator
+
+build:
+  # Phase 0 确定性构建 Spike 后填写:
+  # 工具链版本、依赖锁、构建命令、产物清单与已知非确定性差异。
+  toolchain: TBD
+  entrypoint: TBD
+  reproducibility: pending-phase-0-spike
+
+deploy:
+  normal: TBD   # 上传、校验、原子切换、服务重启
+  full_flash: TBD
+  rescue: TBD   # MaskROM / recovery / 串口 U-Boot
+
+health:
+  serial: "Phase 0: COM 口、波特率、登录方式"
+  ssh: "Phase 0: 地址、用户、认证(凭据不入库)"
+  check_interval_seconds: 300
+
+constraints:
+  - 无真实样机:整机资源在资源目录中保持隔离,任务停在 blocked_resource
+  - Windows 主机保留串口/刷机/VNC 通道;构建与主机测试进入容器(方案 5.3)

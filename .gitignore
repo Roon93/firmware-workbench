@@ -1,0 +1,30 @@
+# 生成物与依赖
+node_modules/
+lib/
+.client-build/
+release/
+work/
+*.tgz
+*.db
+*.db-shm
+*.db-wal
+.pack-stage/
+
+# DSH 成品环境:运行时与安装产物可再生(组装方式见 README)
+dsh-env/runtime/
+dsh-env/packages/
+dsh-env/data/
+dsh-env/.pack-stage/
+dsh-env/dsh-home/profiles/web/node_modules/
+dsh-env/dsh-home/profiles/web/pnpm-lock.yaml
+
+# Spike 大二进制与运行日志(报告与 DAG 定义保留)
+firmware-workbench/spike/dagu/bin/
+firmware-workbench/spike/dagu/results/
+dagu-latest.json
+dagu-windows.tar.gz
+
+# DSH 运行时状态(绝不入库:防止将来配置的凭据被误提交)
+dsh-env/dsh-home/settings.yaml
+dsh-env/dsh-home/storages/
+.zcode/
