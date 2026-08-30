@@ -28,3 +28,11 @@ dagu-windows.tar.gz
 dsh-env/dsh-home/settings.yaml
 dsh-env/dsh-home/storages/
 .zcode/
+
+# DSH home 运行时状态(含凭据与会话,绝不入库):仅保留 web profile 的手写配置
+dsh-env/dsh-home/*
+!dsh-env/dsh-home/profiles/
+dsh-env/dsh-home/profiles/*
+!dsh-env/dsh-home/profiles/web/
+dsh-env/dsh-home/profiles/web/node_modules/
+dsh-env/dsh-home/profiles/web/pnpm-lock.yaml

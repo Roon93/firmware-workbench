@@ -357,6 +357,9 @@ export function draftDefine(
   }
   const items = listItems(store, requirementId)
   if (items.length === 0) throw new Error('没有需求条目,不允许起草 Define')
+  // 幂等:已有 in-review 版本时直接复用,避免重复点击产生重复评审版本
+  const inReview = listDefineVersions(store, requirementId).find(def => def.status === 'in-review')
+  if (inReview) return inReview
   const now = store.now()
   const version = listDefineVersions(store, requirementId).length + 1
   const id = `DEF-${req.id.replace(/^REQ-/, '')}-v${version}`
