@@ -8,6 +8,7 @@ import { evaluateRequirement, generateAcceptanceBundle } from './core/acceptance
 import { listTestCases, getTestCase, recordTestRun } from './core/testing.js'
 import { demoDirector, type DemoStateView } from './core/demo-player.js'
 import { changeItem } from './core/align.js'
+import { listDefects, confirmAttribution, transitionDefect, proposeWaiver, sweepWaivers, aiTriageSuggest } from './core/triage.js'
 import { aiClarifyQuestions, aiDraftDefine } from './core/ai-orchestrator.js'
 import {
   listRequirements,
@@ -67,6 +68,11 @@ export const ROUTES = {
   itemPropose: `${ROUTE_PREFIX}/items/propose`,
   itemChange: `${ROUTE_PREFIX}/items/change`,
   aiClarify: `${ROUTE_PREFIX}/ai/clarify`,
+  defects: `${ROUTE_PREFIX}/defects`,
+  defectStatus: `${ROUTE_PREFIX}/defects/status`,
+  defectWaiver: `${ROUTE_PREFIX}/defects/waiver`,
+  triageConfirm: `${ROUTE_PREFIX}/triage/confirm`,
+  aiTriage: `${ROUTE_PREFIX}/ai/triage`,
   aiDefine: `${ROUTE_PREFIX}/ai/define`,
   defineDraft: `${ROUTE_PREFIX}/define/draft`,
   defineSubmit: `${ROUTE_PREFIX}/define/submit`,
@@ -145,6 +151,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       case ROUTES.snapshot: {
         // 座舱轮询入口:顺带做状态刷新(幂等),保证阻塞原因与 Ready 队列最新
         workbench.sweep('web')
+        sweepWaivers(service.store)
         const snapshot = workbench.statusSnapshot() as Record<string, unknown>
         const gates = service.store.db
           .prepare('SELECT id, decision FROM gates ORDER BY id')
@@ -212,9 +219,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         sendJson(res, 200, listItems(service.store, url.searchParams.get('req') ?? undefined))
         return
       }
-      case ROUTES.lane:
-        sendJson(res, 200, laneSummary(service.store))
+      case ROUTES.lane: {
+        const lane = laneSummary(service.store) as Record<string, unknown>
+        lane.openDefects = listDefects(service.store, { status: ['open', 'fixing'] })
+        lane.waived = listDefects(service.store, { status: ['waived'] })
+        sendJson(res, 200, lane)
         return
+      }
+      case ROUTES.defects: {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const statusParam = url.searchParams.get('status')
+        sendJson(res, 200, listDefects(service.store, statusParam ? { status: statusParam.split(',') } : undefined))
+        return
+      }
       case ROUTES.demoState: {
         const url = new URL(req.url ?? '/', 'http://localhost')
         const logCursor = Number(url.searchParams.get('logCursor') ?? '0')
@@ -478,6 +495,48 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           service.store.appendEvent('web', 'ai.define_start', { requirementId })
           const result = await aiDraftDefine(service.store, requirementId, 'web')
           sendJson(res, result.ok ? 200 : 502, result)
+          return
+        }
+        case ROUTES.aiTriage: {
+          const result = await aiTriageSuggest(service.store, {
+            caseId: String(body.caseId ?? ''),
+            failureMessage: String(body.failureMessage ?? ''),
+          })
+          sendJson(res, result.ok ? 200 : 502, result)
+          return
+        }
+        case ROUTES.triageConfirm: {
+          const outcome = confirmAttribution(service.store, {
+            caseId: String(body.caseId ?? ''),
+            runId: body.runId ? String(body.runId) : undefined,
+            attribution: (['product', 'test', 'infra', 'spec'].includes(String(body.attribution))
+              ? String(body.attribution)
+              : 'product') as 'product' | 'test' | 'infra' | 'spec',
+            note: String(body.note ?? ''),
+            severity: body.severity === 'critical' ? 'critical' : body.severity === 'minor' ? 'minor' : 'major',
+            actor: 'web',
+          })
+          sendJson(res, 200, { ok: true, ...outcome })
+          return
+        }
+        case ROUTES.defectStatus: {
+          const defect = transitionDefect(service.store, {
+            id: String(body.id ?? ''),
+            status: String(body.status ?? '') as 'open' | 'fixing' | 'fixed' | 'verified' | 'closed' | 'waived',
+            note: body.note ? String(body.note) : undefined,
+            actor: 'web',
+          })
+          sendJson(res, 200, { ok: true, defect })
+          return
+        }
+        case ROUTES.defectWaiver: {
+          const defect = proposeWaiver(service.store, {
+            id: String(body.id ?? ''),
+            until: String(body.until ?? ''),
+            reason: String(body.reason ?? ''),
+            approver: 'web',
+          })
+          sendJson(res, 200, { ok: true, defect })
           return
         }
         case ROUTES.defineDraft: {

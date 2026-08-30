@@ -250,6 +250,25 @@ CREATE TABLE IF NOT EXISTS evidence (
   created_at TEXT NOT NULL
 );
 
+-- 缺陷(提案 §3.2/G3:severity+waiver;status: open→fixing→fixed→verified→closed|waived)
+CREATE TABLE IF NOT EXISTS defects (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  requirement_id TEXT,
+  source_case TEXT,
+  failure_run TEXT,
+  attribution TEXT,
+  root_cause TEXT,
+  assignee TEXT,
+  waiver_until TEXT,
+  waiver_reason TEXT,
+  source_refs TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT NOT NULL,

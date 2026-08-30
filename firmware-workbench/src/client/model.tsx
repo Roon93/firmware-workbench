@@ -92,6 +92,22 @@ export interface LaneSummary {
   definesInReview: Array<{ id: string; requirementId: string; version: number }>
   changedRequirements: Array<{ id: string; title: string }>
   staleTasks: Array<{ id: string; title: string; staleReason?: string }>
+  openDefects?: DefectView[]
+  waived?: DefectView[]
+}
+
+export interface DefectView {
+  id: string
+  title: string
+  severity: 'critical' | 'major' | 'minor'
+  status: string
+  requirementId?: string
+  sourceCase?: string
+  rootCause?: string
+  waiverUntil?: string
+  waiverReason?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export interface Snapshot {

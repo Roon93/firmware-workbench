@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { EvidenceStore } from './evidence/store.js'
 import type { WorkbenchStore } from './store.js'
 import { buildJunitXml, levelRank, listTestCases, summarizeCoverage, type TestCaseRow } from './testing.js'
+import { blockingDefects } from './triage.js'
 import { listAcceptanceCriteria } from './requirement.js'
 import { listTestRuns } from './workbench.js'
 import type { TestLevel, TestResult } from '../types.js'
@@ -105,8 +106,18 @@ export function evaluateRequirement(
     }
   }
 
+  // 门禁挂载(提案 §3.2/G3):需求下 open/fixing 的 critical 缺陷 → 强制 BLOCKED
+  const blockers = blockingDefects(store, requirementId)
+  if (blockers.length > 0) {
+    for (const defect of blockers) {
+      reasons.push(`critical 缺陷 ${defect.id} 未关闭:${defect.title}`)
+    }
+  }
+
   let decision: AcceptanceDecision['decision']
-  if (criteria.length === 0) {
+  if (blockers.length > 0) {
+    decision = 'BLOCKED'
+  } else if (criteria.length === 0) {
     decision = 'BLOCKED'
     reasons.push('需求尚无验收标准')
   } else if (notRun + blocked + invalid > 0) {

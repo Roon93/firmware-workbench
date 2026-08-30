@@ -24,6 +24,13 @@ export function OverviewView(props: { data: WbData; onGoto: (view: string) => vo
   const ready = snapshot?.ready.length ?? 0
   const blocked = (snapshot?.tasks.byStatus.blocked_dependency ?? 0) + (snapshot?.tasks.byStatus.blocked_gate ?? 0)
   const resBlocked = snapshot?.tasks.byStatus.blocked_resource ?? 0
+  const lane = snapshot?.lane
+  const laneHasItems =
+    (lane?.openDefects?.length ?? 0) +
+      (lane?.staleTasks?.length ?? 0) +
+      (lane?.definesInReview?.length ?? 0) +
+      (lane?.changedRequirements?.length ?? 0) >
+    0
 
   const runNext = async (): Promise<void> => {
     const next = snapshot?.ready[0]
@@ -53,6 +60,47 @@ export function OverviewView(props: { data: WbData; onGoto: (view: string) => vo
           </>
         }
       />
+      {lane && laneHasItems && (
+        <div className="wb-card" style={{ marginBottom: 'var(--wb-sp-3)' }}>
+          <div className="wb-card__head">
+            我的车道
+            <span className="wb-card__head-sub">当前需要你处理的事项</span>
+          </div>
+          <div className="wb-card__body" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(lane.openDefects ?? []).map(defect => (
+              <div key={defect.id} className="wb-task-row">
+                <span className="wb-mono" style={{ color: 'var(--wb-st-failed_product)' }}>
+                  {defect.id}
+                </span>
+                <span className="wb-task-row__title">{defect.title}</span>
+                <StatusChip status={defect.severity === 'critical' ? 'PRODUCT_FAIL' : 'failed_test'} label={defect.severity} />
+                <StatusChip status="blocked_gate" label={defect.status} />
+              </div>
+            ))}
+            {(lane.staleTasks ?? []).slice(0, 5).map(task => (
+              <div key={task.id} className="wb-task-row">
+                <span className="wb-mono">{task.id}</span>
+                <span className="wb-task-row__title">{task.title}</span>
+                <StatusChip status="blocked_resource" label="stale 待重评估" />
+              </div>
+            ))}
+            {(lane.definesInReview ?? []).map(define => (
+              <div key={define.id} className="wb-task-row">
+                <span className="wb-mono">{define.id}</span>
+                <span className="wb-task-row__title">Define 评审中(v{define.version})</span>
+                <StatusChip status="ready" label="待评审" />
+              </div>
+            ))}
+            {(lane.changedRequirements ?? []).map(req => (
+              <div key={req.id} className="wb-task-row">
+                <span className="wb-mono">{req.id}</span>
+                <span className="wb-task-row__title">{req.title}</span>
+                <StatusChip status="changed" label="需求已变更,需重走 G1" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="wb-grid wb-grid--kpi" style={{ marginBottom: 'var(--wb-sp-3)' }}>
         <KpiCard label="任务进度" value={`${done}/${total}`} sub={`${Math.round((done / Math.max(1, total)) * 100)}%`} />
         <KpiCard label="进行中" value={active} sub={active > 0 ? '执行中' : '空闲'} tone={active > 0 ? 'run' : undefined} />
@@ -364,6 +412,44 @@ export function TestsView(props: { data: WbData }): React.JSX.Element {
   const runCaseSilent = async (caseId: string): Promise<void> => {
     await fetchJson('/case-run', { method: 'POST', body: JSON.stringify({ caseId }) })
   }
+  const [triageCase, setTriageCase] = useState<string | null>(null)
+  const [triageNote, setTriageNote] = useState('')
+  const [aiSuggest, setAiSuggest] = useState<string | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  const doTriage = async (caseId: string, attribution: string): Promise<void> => {
+    await fetchJson('/triage/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ caseId, attribution, note: triageNote, severity: 'major' }),
+    })
+    show(`${caseId} 归因 ${attribution} 已确认`)
+    setTriageCase(null)
+    setTriageNote('')
+    await data.reloadReport()
+    await data.refresh()
+  }
+  const aiTriage = async (caseId: string): Promise<void> => {
+    setAiBusy(true)
+    setAiSuggest(null)
+    try {
+      const result = await fetchJson<{
+        ok: boolean
+        suggestion?: { attribution: string; confidence: string; rationale: string }
+        error?: string
+      }>('/ai/triage', {
+        method: 'POST',
+        body: JSON.stringify({ caseId, failureMessage: `${caseId} 测试失败` }),
+      })
+      setAiSuggest(
+        result.suggestion
+          ? `${result.suggestion.attribution}(${result.suggestion.confidence}):${result.suggestion.rationale}`
+          : result.error ?? 'AI 无建议',
+      )
+    } catch (error) {
+      setAiSuggest(error instanceof Error ? error.message : String(error))
+    } finally {
+      setAiBusy(false)
+    }
+  }
 
   return (
     <div className="wb-view">
@@ -398,7 +484,10 @@ export function TestsView(props: { data: WbData }): React.JSX.Element {
                   <tr
                     key={testCase.id}
                     style={{ cursor: 'pointer', opacity: isL4 ? 0.55 : 1 }}
-                    onClick={() => setExpanded(expandedRow ? null : testCase.id)}
+                    onClick={() => {
+                      setExpanded(expandedRow ? null : testCase.id)
+                      if (!expandedRow && latest && ['PRODUCT_FAIL', 'TEST_FAIL', 'INFRA_FAIL'].includes(latest.result)) setTriageCase(testCase.id)
+                    }}
                   >
                     <td>{isL4 ? <span className="wb-faint">◌</span> : <StatusDot status={latest ? latest.result : 'planned'} />}</td>
                     <td>
@@ -445,6 +534,33 @@ export function TestsView(props: { data: WbData }): React.JSX.Element {
                             {step.human && <span> 👤 {step.human}</span>}
                           </div>
                         ))}
+                        {latest && ['PRODUCT_FAIL', 'TEST_FAIL', 'INFRA_FAIL'].includes(latest.result) && triageCase === testCase.id && (
+                          <div style={{ marginTop: 8, padding: 10, background: 'var(--wb-bg-1)', border: '1px solid var(--wb-border)', borderRadius: 6 }}>
+                            <div className="wb-side__title">失败归因(四分类,提案 §3.2)</div>
+                            {aiSuggest && <div className="wb-banner" style={{ marginBottom: 6 }}>AI 建议:{aiSuggest}</div>}
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                              {[
+                                ['product', '产品缺陷'],
+                                ['test', '用例问题'],
+                                ['infra', '基础设施'],
+                                ['spec', '验收标准有误(回流需求变更)'],
+                              ].map(([key, label]) => (
+                                <button key={key} className="wb-btn wb-btn--sm" disabled={busyCase !== null} onClick={() => void doTriage(testCase.id, key)}>
+                                  {label}
+                                </button>
+                              ))}
+                              <button className="wb-btn wb-btn--sm wb-btn--ghost" disabled={aiBusy} onClick={() => void aiTriage(testCase.id)}>
+                                <Icon name="zap" size={11} /> {aiBusy ? 'AI 分析中…' : 'AI 归因建议'}
+                              </button>
+                            </div>
+                            <input
+                              className="wb-input"
+                              placeholder="归因说明/根因"
+                              value={triageNote}
+                              onChange={event => setTriageNote(event.target.value)}
+                            />
+                          </div>
+                        )}
                         <div className="wb-side__title" style={{ marginTop: 8 }}>前置 / 证据</div>
                         <div className="wb-faint" style={{ fontSize: 11, lineHeight: 1.8 }}>
                           前置:{testCase.preconditions.join(' · ') || '—'}
